@@ -220,6 +220,8 @@ class World:
             from .sensors.runtime import SensorRuntime
             self.sensors = SensorRuntime(self, sensor_specs)
         self.inspection = None
+        from .plugins import PluginHost
+        self.plugins = PluginHost(cfg.get("plugin", []), self)   # the robot's [[plugin]]s (scrimmage/plugins.py)
         if shared is None:
             self.reset()                    # a MultiWorld resets the robots it shares a model with together
         # The robot's height, reach and diameter against a season's match limits (scrimmage/inspection/monitor.py),
@@ -284,6 +286,7 @@ class World:
             self.partner.reset()
         if self.sensors is not None:
             self.sensors.reset()
+        self.plugins.reset()
 
     def reset_robot(self) -> None:
         """Put the robot's joints (its pose and every mechanism) back to qpos0 at rest, the robot at its start pose;
@@ -423,7 +426,7 @@ class World:
             rng.before_physics(hal, self.vbatt, self.model.opt.timestep)
             mujoco.mj_step(self.model, self.data)
             rng.after_physics()
-        self.after_physics()
+        self.after_physics(hal)
 
     def drive(self, hal: HalState, clear: bool = True) -> None:
         """Before a physics timestep: the motors' and air system's forces from the robot program's latest outputs.
@@ -445,9 +448,10 @@ class World:
             self.external(self.data)
         if self.pneumatics is not None:
             self.pneumatics.before_physics(hal, enabled, self.model.opt.timestep)
+        self.plugins.before_step(hal)
 
-    def after_physics(self) -> None:
-        """After a physics timestep: the monitors and sensors read the new state."""
+    def after_physics(self, hal: HalState) -> None:
+        """After a physics timestep: the monitors, sensors and plugins read the new state."""
         if self.terrain is not None:
             self.terrain.after_physics()
         if self.climb is not None:
@@ -458,6 +462,7 @@ class World:
             self.partner.after_physics()
         if self.sensors is not None:
             self.sensors.update(self.data)
+        self.plugins.after_step(hal)
 
     def _bus_voltage(self, rng) -> float:
         """The battery's terminal voltage this step: V = nominal - R * (the supply current every motor draws at V).
@@ -561,6 +566,7 @@ class World:
             ups += self.pneumatics.sensor_updates()
         if self.sensors is not None:
             ups += self.sensors.sensor_updates()
+        ups += self.plugins.sensor_updates(hal)
         return ups
 
     def robot_pose(self) -> tuple[float, float, float]:
