@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, multi-robot]
   pull_request:
   # weekly run catches breakage from new runner images and new RobotPy/MuJoCo releases
   schedule:
