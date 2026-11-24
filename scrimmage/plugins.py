@@ -20,6 +20,7 @@ import time
 from typing import Any
 
 from .bindings import Update
+from .i18n import t
 from .protocol import HalState
 
 
@@ -30,11 +31,13 @@ class PluginError(ValueError):
 def load_class(path: str) -> type:
     module, _, name = path.partition(":")
     if not module or not name:
-        raise PluginError(f'[[plugin]] class must be "package.module:Class", not {path!r}')
+        raise PluginError(t("{plugin_table} needs {class_setting}, not {path}", plugin_table="[[plugin]]",
+                              class_setting='class = "package.module:Class"', path=repr(path)))
     try:
         return getattr(importlib.import_module(module), name)
     except (ImportError, AttributeError) as e:
-        raise PluginError(f"[[plugin]] class {path!r} can't be loaded: {e}") from None
+        raise PluginError(t("{plugin_table} class {path} can't be loaded: {error}",
+                              plugin_table="[[plugin]]", path=repr(path), error=e)) from None
 
 
 class PluginHost:
@@ -46,7 +49,8 @@ class PluginHost:
             settings = dict(entry)
             path = settings.pop("class", None)
             if not isinstance(path, str):
-                raise PluginError('each [[plugin]] needs class = "package.module:Class"')
+                raise PluginError(t("each {plugin_table} needs {class_setting}", plugin_table="[[plugin]]",
+                                    class_setting='class = "package.module:Class"'))
             cls = load_class(path)
             try:
                 self.plugins.append(cls(world, **settings))

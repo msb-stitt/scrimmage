@@ -63,6 +63,8 @@ FALLBACK = "settings.js's fallback before app.js hands it its words (useWords; i
 
 ALLOWED = {
     # ---- Python ---------------------------------------------------------------------------------------------------
+    ('scrimmage/multi.py', 'speed is 1.0 (real time) or None (as fast as the robots allow)'): DEV,
+    ('scrimmage/multi.py', 'the physics timestep {} s must divide 1 ms'): DEV,
     ('scrimmage/assembler/bench_session.py', 'version (the integer from the state) is required'): API,
     ('scrimmage/assembler/bench_session.py', 'values must be a table of dotted keys and their values'): API,
     ('scrimmage/assembler/bench_session.py', 'unknown op {} ({})'): API,
