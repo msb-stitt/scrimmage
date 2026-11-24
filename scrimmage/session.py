@@ -550,10 +550,13 @@ class Session:
         target = w.time + seconds - 1e-9
         realtime = not (b.mode == "lockstep" and driver is not None)
         if not realtime:
-            n = max(1, round(seconds / self.config.step))
+            # a step of 0 syncs the robot at its own alarms, steps of varying length: step until the time is reached
+            n = max(1, round(seconds / self.config.step)) if self.config.step else None
             pacer = Pacer(self.speed)
             pacer.start(w.time)
-            for _ in range(n):
+            k = 0
+            while (k < n) if n is not None else (w.time < target):
+                k += 1
                 r = await driver.step_once(timeout=self.config.step_timeout)
                 if r == "released":   # Phoenix 6 devices appeared: the rest runs in real time
                     realtime = True

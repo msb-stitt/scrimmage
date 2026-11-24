@@ -23,6 +23,8 @@ STALL_REPEAT = 10.0        # then warn this often
 KEEPALIVE_PERIOD = 0.5     # wall seconds between keep-alives while held
 ENGAGE_RESEND = 2.0        # re-send engage this often until the extension acknowledges it
 VALUES_WAIT = 1.0          # wall seconds to wait for a step's new SimDevice values before carrying on
+ALARM_GRID_US = 1000       # step = 0: the robot is synced at its next alarm rounded up to this, us
+ALARM_MAX_GAP_US = 100_000  # step = 0: a robot with no alarm due is still synced this often, us
 
 
 def parse_speed(text: str) -> float | None:
@@ -39,7 +41,10 @@ def parse_speed(text: str) -> float | None:
 
 
 def physics_steps_per_step(step: float, timestep: float) -> int:
-    """How many physics timesteps make one lockstep step; the step must be a whole multiple."""
+    """How many physics timesteps make one lockstep step; the step must be a whole multiple. A step of 0 syncs the
+    robot at its own alarms (LockstepDriver), so it is the physics steps in one millisecond."""
+    if step == 0:
+        step = ALARM_GRID_US / 1e6
     n = round(step / timestep)
     if n < 1 or abs(n * timestep - step) > 1e-9:
         raise ValueError(f"lockstep step {step:g} s must be a whole multiple of the physics timestep {timestep:g} s")
@@ -73,7 +78,9 @@ class LockstepDriver:
     """Alternates physics steps with robot program steps until the connection ends.
 
     Each cycle: step physics by one lockstep step, run the per-tick extras, push sensors, then ask the
-    extension to step the robot clock (>step_seq = n) and wait for <done_seq >= n. Everything travels on
+    extension to step the robot clock (>step_seq = n) and wait for <done_seq >= n. With a step of 0, n is instead
+    the robot's next alarm rounded up to the millisecond, us, which the extension reports as next_us, and physics
+    steps to it: the robot is synced only when a loop of its own is due. Everything travels on
     the one WebSocket in order, so once done_seq arrives, that step's motor outputs are already in hal.
 
     Phoenix 6 devices end it, and the real Driver Station does at once: they follow the wall clock, so between steps
@@ -113,6 +120,16 @@ class LockstepDriver:
                     next_warn = time.monotonic() + STALL_REPEAT
         return "ok"
 
+    def _next_sync_us(self) -> int:
+        """step = 0: the time to sync the robot at, us: its next alarm rounded up to the millisecond, at most
+        ALARM_MAX_GAP_US after the last sync and at least one millisecond after it."""
+        last = self.seq
+        nxt = self._get("<next_us")
+        if nxt is None:
+            return last + ALARM_GRID_US
+        t = -(-int(nxt) // ALARM_GRID_US) * ALARM_GRID_US
+        return max(last + ALARM_GRID_US, min(t, last + ALARM_MAX_GAP_US))
+
     async def _engage(self) -> bool:
         step_us = round(self.b.step * 1e6)
         attempts = 0
@@ -132,7 +149,7 @@ class LockstepDriver:
             return
         if not b._connected(self.conn):
             return  # the robot program went away right after acknowledging
-        log.info("lockstep engaged: %g ms steps, %s", b.step * 1000,
+        log.info("lockstep engaged: %s, %s", f"{b.step * 1000:g} ms steps" if b.step else "synced at its alarms",
                  "held" if b.held else ("speed max" if b.speed is None else f"speed {b.speed:g}x"))
         b._restart_clock()
         b._rewind_log()  # drop rows logged in real time before the hand-off
@@ -189,14 +206,18 @@ class LockstepDriver:
                                      f"step {self.seq}", timeout)
             if r != "ok":
                 return r
-        for _ in range(b.physics_per_step):
+        if b.step == 0:
+            n = self._next_sync_us()
+            steps = (n - self.seq) // ALARM_GRID_US * b.physics_per_step
+        else:
+            n, steps = self.seq + 1, b.physics_per_step
+        for _ in range(steps):
             w.step(b.hal)
         await b._on_tick(w.time)
         if b.done.is_set():
             return "done"
         await b._push_sensors()
-        self.seq += 1
-        n = self.seq
+        self.seq = n
         await b._send([frame(*LOCKSTEP_DEVICE, {">step_seq": n})])
         r = await self._wait_for(lambda: int(self._get("<done_seq", 0) or 0) >= n, f"step {n}", timeout)
         return r if r != "ok" else await self._wait_for_values()
