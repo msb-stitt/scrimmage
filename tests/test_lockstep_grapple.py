@@ -249,8 +249,8 @@ def test_load_extension_installs_the_grapple_helper(monkeypatch, capsys, tmp_pat
 @pytest.mark.parametrize("platform,machine", [("darwin", "arm64"), ("win32", "ARM64")])
 def test_load_extension_without_lockstep_installs_the_helpers_without_the_library(monkeypatch, capsys, caplog, tmp_path,
                                                                                  platform, machine):
-    """Lockstep is built only for Linux and Windows x64: elsewhere the package has no library, so loading it says once
-    that the robot runs in real time and still installs the helpers."""
+    """Lockstep is built only for Linux, macOS and Windows x64: elsewhere, or on macOS installed without its library,
+    the package has none, so loading it says once that the robot runs in real time and still installs the helpers."""
     fakes = Fakes()
     for name, mod in fakes.modules().items():
         monkeypatch.setitem(sys.modules, name, mod)
@@ -263,7 +263,7 @@ def test_load_extension_without_lockstep_installs_the_helpers_without_the_librar
     with caplog.at_level("INFO", logger="scrimmage_lockstep"):
         pkg.loadExtension()
     assert [r.getMessage() for r in caplog.records] == [
-        "lockstep runs on Linux and Windows x64 only: on this computer the robot runs in real time"]
+        "lockstep runs on Linux, macOS and Windows x64 only: on this computer the robot runs in real time"]
     helper = sys.modules["scrimmage_lockstep.grapple"]
     assert fakes.g.LaserCAN is helper.LaserCAN
     fakes.g.LaserCAN(7)
