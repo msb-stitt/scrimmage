@@ -96,12 +96,6 @@ class MultiWorld:
             w.after_physics(hals[name])
 
 
-def _copy(hal: HalState) -> HalState:
-    out = HalState()
-    out.devices = {key: dict(values) for key, values in hal.devices.items()}
-    return out
-
-
 def ceil_ms(us: int) -> int:
     return -(-us // MS) * MS
 
@@ -281,10 +275,6 @@ class MultiServer:
             except TimeoutError:
                 pass
 
-    def _step_ms(self, hals: dict[str, HalState]) -> None:
-        for _ in range(self.steps_per_ms):
-            self.world.step(hals)
-
     async def _physics(self) -> None:
         """Step physics 1 ms at a time: sync the robots due, wait for them as the mode says, step. In real time keep
         pace with the wall clock; robots not in lockstep get their sensors every SENSOR_PERIOD."""
@@ -316,9 +306,11 @@ class MultiServer:
                 for name, link in self.links.items():
                     if link.ws is not None and not link.engaged:
                         await self._push_sensors(name)
-            # on a thread of its own, so the sockets go on while MuJoCo steps; with a copy of each robot's HAL state,
-            # so frames arriving meanwhile don't change the outputs half-way through the millisecond
-            await asyncio.to_thread(self._step_ms, {name: _copy(hal) for name, hal in self.hals().items()})
+            # on the event loop: a worker thread for each millisecond's step ran a fast run 3.5 times slower, for
+            # no less lateness on the loop (scr.step_thread, 2026-11-24)
+            hals = self.hals()
+            for _ in range(self.steps_per_ms):
+                w.step(hals)
             if realtime:
                 ahead = (w.time - sim0) - (time.monotonic() - wall0)
                 await asyncio.sleep(ahead if ahead > 0 else 0)
