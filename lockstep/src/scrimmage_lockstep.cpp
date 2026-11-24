@@ -6,6 +6,10 @@
 // including TimedRobot's loop, and waits for them) and then reports done_seq. Only the HAL C API
 // is used, so one build works with RobotPy's and GradleRIO's HAL of the same WPILib year.
 //
+// With step_us = 0, step_seq is instead the FPGA time, us, to step to, and before done_seq the extension reports
+// next_us, the robot's next notifier alarm, so a server can sync each robot at its own times (the fork's multi-robot
+// branch; tests/test_lockstep_time.py).
+//
 // halsim_ws_client starts relaying a SimDevice created mid-run from its own network thread, so a device the robot
 // creates during a step can reach scrimmage after that step's done_seq. With each done_seq the extension therefore
 // also reports sim_values, how many distinct SimDevice values exist, and scrimmage waits until it has heard of that
@@ -29,6 +33,7 @@
 #include <vector>
 
 #include <hal/Extensions.h>
+#include <hal/HALBase.h>
 #include <hal/Notifier.h>
 #include <hal/Ports.h>
 #include <hal/SimDevice.h>
@@ -158,6 +163,7 @@ void WatchPneumaticHubs() {
 
 struct State {
   HAL_SimValueHandle engage = 0, stepUs = 0, stepSeq = 0, engaged = 0, doneSeq = 0, keepalive = 0, simValues = 0;
+  HAL_SimValueHandle nextUs = 0;  // the next notifier alarm, us, after a step to a time (step_us = 0)
   std::mutex m;
   std::condition_variable cv;
   bool engagePending = false;     // guarded by m
@@ -302,7 +308,17 @@ void WorkerLoop(State* s) {
       if (seq > done) {
         engage();  // a step request always gets its step, even after the watchdog released the clock
         int64_t us = HAL_GetSimValueLong(s->stepUs);
-        if (us > 0) HALSIM_StepTiming(static_cast<uint64_t>(us));
+        if (us > 0) {
+          HALSIM_StepTiming(static_cast<uint64_t>(us));
+        } else {
+          // step_us = 0: step_seq is the FPGA time, us, to step to. HALSIM_StepTiming stops at each notifier alarm
+          // on the way and waits for its loop, so a loop runs at its own alarm and the clock ends at step_seq.
+          int32_t status = 0;
+          const uint64_t now = HAL_GetFPGATime(&status);
+          if (static_cast<uint64_t>(seq) > now) HALSIM_StepTiming(static_cast<uint64_t>(seq) - now);
+          const uint64_t next = HALSIM_GetNextNotifierTimeout();
+          HAL_SetSimValueLong(s->nextUs, next > static_cast<uint64_t>(INT64_MAX) ? INT64_MAX : static_cast<int64_t>(next));
+        }
         HAL_SetSimValueLong(s->simValues, gValueCount.load());  // relayed before done_seq (same device, in order)
         HAL_SetSimValueLong(s->doneSeq, seq);
         done = seq;
@@ -387,6 +403,7 @@ SCRIMMAGE_EXPORT int HALSIM_InitExtension(void) {
   s->doneSeq = HAL_CreateSimValueLong(dev, "done_seq", HAL_SimValueOutput, 0);
   s->keepalive = HAL_CreateSimValueLong(dev, "keepalive", HAL_SimValueInput, 0);
   s->simValues = HAL_CreateSimValueLong(dev, "sim_values", HAL_SimValueOutput, 0);
+  s->nextUs = HAL_CreateSimValueLong(dev, "next_us", HAL_SimValueOutput, 0);
   HALSIM_RegisterSimDeviceCreatedCallback("", nullptr, OnDeviceCreated, true);  // counts its own values too
   WatchPneumaticHubs();  // after the line above, so the ScrimmagePH devices' values are counted
 
