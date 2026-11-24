@@ -22,8 +22,8 @@ def windows_x64() -> bool:
 
 
 def library_path() -> Path:
-    """The extension for this computer: the built .so on Linux, the prebuilt DLL on Windows x64. Anywhere else, a
-    path that doesn't exist (nothing is built there; the robot runs in real time)."""
+    """The extension for this computer: the built .so on Linux, the built .dylib on macOS, the prebuilt DLL on Windows
+    x64. Anywhere else, a path that doesn't exist (nothing is built there; the robot runs in real time)."""
     lib = Path(__file__).resolve().parent / "lib"
     if sys.platform == "win32":
         folder = "win_amd64" if windows_x64() else f"win_{platform.machine().lower() or 'unknown'}"
@@ -76,7 +76,7 @@ def loadExtension() -> None:
     elif sys.platform.startswith("linux"):
         raise ImportError(f"{path} is missing; reinstall scrimmage-lockstep")
     else:  # nothing built here (see CMakeLists.txt): scrimmage notices no lockstep device and runs in real time
-        logger.info("lockstep runs on Linux and Windows x64 only: on this computer the robot runs in real time")
+        logger.info("lockstep runs on Linux, macOS and Windows x64 only: on this computer the robot runs in real time")
     try:  # drive REV SPARKs' simulation (a no-op without robotpy-rev); never stops the robot program
         from . import rev as rev_helper
 

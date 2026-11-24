@@ -213,7 +213,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('examples/java_swerve/**/*.gradle', 'examples/java_maxswerve/**/*.gradle', 'examples/java_fastmode/**/*.gradle', 'scrimmage/java/fastmode/**/*.gradle', 'tests/java_probe/**/*.gradle', 'tests/rev_probe/**/*.gradle', '**/vendordeps/*.json', '**/gradle-wrapper.properties') }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('examples/java_swerve/**/*.gradle', 'examples/java_maxswerve/**/*.gradle', 'examples/java_fastmode/**/*.gradle', 'scrimmage/java/fastmode/**/*.gradle', 'tests/java_probe/**/*.gradle', 'tests/rev_probe/**/*.gradle', 'tests/lockstep_time_java_probe/**/*.gradle', '**/vendordeps/*.json', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
       # headless rendering for the swerve scenario's screenshot
       - name: Install OSMesa
@@ -241,6 +241,7 @@ jobs:
           (cd scrimmage/java/fastmode && ./gradlew --stop) || true
           (cd tests/java_probe && ./gradlew --stop) || true
           (cd tests/rev_probe && ./gradlew --stop) || true
+          (cd tests/lockstep_time_java_probe && ./gradlew --stop) || true
 
   # The FreeCAD exporter tests run the add-on inside headless FreeCAD (the official AppImage, extracted: runners have
   # no FUSE). Verified headless on a bare ubuntu:24.04 (no extra packages) and against the whole `-m freecad` suite.

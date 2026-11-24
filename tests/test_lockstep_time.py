@@ -2,7 +2,8 @@
 extension answers with next_us, the robot's next notifier alarm, before done_seq. This test plays the server: it syncs
 the robot only at its next alarm rounded up to the millisecond, setting a sensor to that millisecond first.
 
-Needs `pip install ./lockstep` (plus robotpy[sim] and robotpy-halsim-ws).
+Needs `pip install ./lockstep` (plus robotpy[sim] and robotpy-halsim-ws). The Java robot, a copy of the RobotPy one,
+also needs a JDK 17 and runs with the java marker.
 """
 
 import asyncio
@@ -19,9 +20,11 @@ pytest.importorskip("scrimmage_lockstep")
 
 from test_lockstep_ext import DEV, FakeSim  # noqa: E402
 
+from scrimmage import java_tools, robot_process  # noqa: E402
 from scrimmage.protocol import frame  # noqa: E402
 
 PORT = 3319
+TESTS = os.path.dirname(os.path.abspath(__file__))
 PROBE = ("SimDevice", "TimeProbe")
 PERIODS_MS = (20, 21, 25, 40)
 RUN_US = 1_000_000
@@ -31,20 +34,32 @@ def ceil_ms(us):
     return -(-us // 1000) * 1000
 
 
-async def run_probe(body):
+def robot_command(lang):
+    """The probe robot's command, folder and extra environment, by its language."""
+    if lang == "python":
+        return ([sys.executable, "-m", "robotpy", "sim", "--nogui", "--ws-client", "--scrimmage-lockstep"],
+                os.path.join(TESTS, "lockstep_time_probe"), {})
+    gradlew = "gradlew.bat" if sys.platform == "win32" else "./gradlew"
+    return ([gradlew, "-I", str(java_tools.init_script_path()), "simulateJava"],
+            os.path.join(TESTS, "lockstep_time_java_probe"), robot_process._scrimmage_paths())
+
+
+async def run_probe(body, lang="python", connect_s=30):
     sim = FakeSim()
-    env = dict(os.environ, HALSIMWS_PORT=str(PORT), HALSIMWS_HOST="localhost")
+    command, cwd, extra = robot_command(lang)
+    env = dict(os.environ, HALSIMWS_PORT=str(PORT), HALSIMWS_HOST="localhost", **extra)
     async with websockets.serve(sim.handler, "localhost", PORT):
-        robot = subprocess.Popen(
-            [sys.executable, "-m", "robotpy", "sim", "--nogui", "--ws-client", "--scrimmage-lockstep"],
-            cwd=os.path.join(os.path.dirname(__file__), "lockstep_time_probe"), env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        robot = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, start_new_session=sys.platform != "win32")
         try:
-            await asyncio.wait_for(sim.connected.wait(), 30)
+            await asyncio.wait_for(sim.connected.wait(), connect_s)
             await sim.until(lambda: DEV in sim.hal.devices and sim.get(PROBE, "<n20") is not None, 30)
             await body(sim)
         finally:
-            robot.kill()
+            if sys.platform != "win32":
+                os.killpg(robot.pid, 9)   # Gradle's robot JVM is a child of the wrapper
+            else:
+                robot.kill()
             out = robot.communicate()[0]
     return out
 
@@ -58,7 +73,21 @@ async def sync(sim, t_us):
     return sim.get(DEV, "<next_us")
 
 
-def test_steps_to_each_alarm_rounded_up_to_the_millisecond():
+@pytest.fixture(scope="module")
+def java_probe_built():
+    if "SCRIMMAGE_LOCKSTEP_SO" not in robot_process._scrimmage_paths():
+        pytest.skip("no lockstep extension built for this computer")
+    java_tools.build_agent()
+    command, cwd, extra = robot_command("java")
+    r = subprocess.run([command[0], "build"], cwd=cwd, env=dict(os.environ, **extra), capture_output=True, text=True)
+    assert r.returncode == 0, "gradlew build failed:\n" + (r.stdout + r.stderr)[-3000:]
+
+
+@pytest.mark.parametrize("lang", ["python", pytest.param("java", marks=pytest.mark.java)])
+def test_steps_to_each_alarm_rounded_up_to_the_millisecond(lang, request):
+    if lang == "java":
+        request.getfixturevalue("java_probe_built")
+
     async def body(sim):
         await sim.engage(step_us=0)
         nxt = await sync(sim, 1000)
@@ -85,4 +114,4 @@ def test_steps_to_each_alarm_rounded_up_to_the_millisecond():
         frozen = {ms: sim.get(PROBE, f"<n{ms}") for ms in PERIODS_MS}
         await asyncio.sleep(0.5)                                 # no step, no robot time
         assert {ms: sim.get(PROBE, f"<n{ms}") for ms in PERIODS_MS} == frozen
-    asyncio.run(run_probe(body))
+    asyncio.run(run_probe(body, lang, connect_s=30 if lang == "python" else 180))

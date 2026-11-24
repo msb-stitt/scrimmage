@@ -2,11 +2,11 @@ cmake_minimum_required(VERSION 3.21)
 # No language yet: off Linux nothing is compiled, so no C++ compiler is needed there.
 project(scrimmage_lockstep LANGUAGES NONE)
 
-# On Linux `pip install` builds and installs the two libraries. Elsewhere pyproject.toml skips CMake altogether and the
+# On Linux `pip install` builds and installs the two libraries, and on macOS the extension. Elsewhere pyproject.toml skips CMake altogether and the
 # package is pure Python. On Windows it carries a prebuilt extension (scrimmage_lockstep/lib/win_amd64), which CI
 # builds by running CMake here directly (.github/workflows/ci.yml, the windows job); lockstep/tools/stamp.py records
 # which source it came from.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR WIN32)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR WIN32)
   enable_language(CXX)
   set(CMAKE_CXX_STANDARD 20)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,6 +39,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR WIN32)
     # MSVC 17.10 or later crashes there at its first lock (Microsoft's documented workaround).
     target_compile_definitions(halsim_scrimmage_lockstep PRIVATE _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
     install(TARGETS halsim_scrimmage_lockstep RUNTIME DESTINATION scrimmage_lockstep/lib/win_amd64)
+  elseif(APPLE)
+    # libwpiHal.dylib's install name is @rpath/libwpiHal.dylib, so this records that name: at runtime it binds to the
+    # HAL the robot process already loaded. No seed library: it works by LD_PRELOAD, which is Linux's.
+    target_link_libraries(halsim_scrimmage_lockstep PRIVATE "${WPIHAL_DIR}/lib/libwpiHal.dylib")
+    install(TARGETS halsim_scrimmage_lockstep LIBRARY DESTINATION scrimmage_lockstep/lib)
   else()
     # libwpiHal.so's SONAME is "libwpiHal.so", so this records NEEDED libwpiHal.so (no path): at runtime
     # it binds to the HAL the robot process already loaded.
@@ -50,5 +55,5 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR WIN32)
     install(TARGETS halsim_scrimmage_lockstep scrimmage_seed LIBRARY DESTINATION scrimmage_lockstep/lib)
   endif()
 else()
-  message(STATUS "lockstep is built on Linux and Windows only: installing scrimmage_lockstep as pure Python")
+  message(STATUS "lockstep is built on Linux, macOS and Windows only: installing scrimmage_lockstep as pure Python")
 endif()
