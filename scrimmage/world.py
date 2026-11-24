@@ -77,11 +77,21 @@ def _label(b, index: int) -> str:
 
 
 class World:
-    def __init__(self, cfg: dict, cfg_dir: Path):
+    def __init__(self, cfg: dict, cfg_dir: Path, shared: tuple[mujoco.MjModel, mujoco.MjData] | None = None):
+        """One robot in its model. With `shared`, the robot is one of several in a model and data that a MultiWorld
+        (scrimmage/multi.py) holds and steps: its config's bindings name that model's (prefixed) joints and bodies,
+        and only [[motor]], [[encoder]], [[gyro]], [[analog]], [[digital]] and [battery] are taken."""
         mcfg = cfg.get("model", {})
         rcfg = cfg.get("robot", {})
         self.parts = None
-        if "part" not in cfg and "mjcf" not in mcfg:
+        self.shared = shared is not None
+        if shared is not None:
+            unsupported = sorted(k for k in ("part", "range", "partner", "pneumatics", "sensor", "inspection",
+                                             "shooter") if k in cfg)
+            if unsupported:
+                raise ValueError(t("a robot sharing a model takes no {tables}",
+                                   tables=", ".join(f"[{k}]" for k in unsupported)))
+        if shared is None and "part" not in cfg and "mjcf" not in mcfg:
             if "parts" in cfg:
                 raise ValueError(t("describe the robot with {part_table} entries (see docs/parts.md) or "
                                    "{model_table} {mjcf_setting} (did you mean {part_table}?)", part_table="[[part]]",
@@ -118,14 +128,21 @@ class World:
             self.warnings = list(self.parts.warnings)
             bind = {**cfg, **self.parts.bindings}
             body_name = self.parts.robot_body
+        elif shared is not None:
+            self.model = shared[0]
+            bind = cfg
+            body_name = rcfg.get("body", "chassis")
         else:
             path = (cfg_dir / mcfg["mjcf"]).resolve()
             self.model = mujoco.MjModel.from_xml_path(str(path))
             bind = cfg
             body_name = rcfg.get("body", "chassis")
-        if "timestep" in mcfg:
-            self.model.opt.timestep = float(mcfg["timestep"])
-        self.data = mujoco.MjData(self.model)
+        if shared is not None:
+            self.data = shared[1]           # the MultiWorld sets the timestep
+        else:
+            if "timestep" in mcfg:
+                self.model.opt.timestep = float(mcfg["timestep"])
+            self.data = mujoco.MjData(self.model)
         self.robot_body_name = body_name
         self.robot_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
         if self.robot_body < 0:
@@ -203,7 +220,8 @@ class World:
             from .sensors.runtime import SensorRuntime
             self.sensors = SensorRuntime(self, sensor_specs)
         self.inspection = None
-        self.reset()
+        if shared is None:
+            self.reset()                    # a MultiWorld resets the robots it shares a model with together
         # The robot's height, reach and diameter against a season's match limits (scrimmage/inspection/monitor.py),
         # sampled every 20 ms of simulated time: only for a config with an [inspection] section; otherwise None, and
         # stepping costs nothing extra. Made after the reset, so its start check measures the start pose.
@@ -397,8 +415,23 @@ class World:
 
     def step(self, hal: HalState) -> None:
         """Advance one physics timestep using the robot program's latest outputs."""
-        self.data.qfrc_applied[:] = 0.0
-        self.model.dof_damping[:] = self._base_damping
+        self.drive(hal)
+        rng = self.test_range
+        if rng is None:
+            mujoco.mj_step(self.model, self.data)
+        else:
+            rng.before_physics(hal, self.vbatt, self.model.opt.timestep)
+            mujoco.mj_step(self.model, self.data)
+            rng.after_physics()
+        self.after_physics()
+
+    def drive(self, hal: HalState, clear: bool = True) -> None:
+        """Before a physics timestep: the motors' and air system's forces from the robot program's latest outputs.
+        `clear` first zeroes the applied forces and sets the damping back; a MultiWorld does that once for all its
+        robots and passes False."""
+        if clear:
+            self.data.qfrc_applied[:] = 0.0
+            self.model.dof_damping[:] = self._base_damping
         # If the robot program has never reported DS state, don't second-guess its outputs.
         enabled = bool(hal.get("DriverStation", "", ">enabled", True))
         for mb in self.motors:
@@ -412,12 +445,9 @@ class World:
             self.external(self.data)
         if self.pneumatics is not None:
             self.pneumatics.before_physics(hal, enabled, self.model.opt.timestep)
-        if rng is None:
-            mujoco.mj_step(self.model, self.data)
-        else:
-            rng.before_physics(hal, self.vbatt, self.model.opt.timestep)
-            mujoco.mj_step(self.model, self.data)
-            rng.after_physics()
+
+    def after_physics(self) -> None:
+        """After a physics timestep: the monitors and sensors read the new state."""
         if self.terrain is not None:
             self.terrain.after_physics()
         if self.climb is not None:
