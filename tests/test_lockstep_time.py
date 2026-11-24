@@ -1,4 +1,4 @@
-"""The lockstep extension stepped to a time (step_us = 0): each step_seq is the FPGA time, us, to step to, and the
+"""The lockstep extension stepped to a time (step_us = 0): each step_seq is the FPGA time, us, to jump to, and the
 extension answers with next_us, the robot's next notifier alarm, before done_seq. This test plays the server: it syncs
 the robot only at its next alarm rounded up to the millisecond, setting a sensor to that millisecond first.
 
@@ -104,7 +104,7 @@ def test_steps_to_each_alarm_rounded_up_to_the_millisecond(lang, request):
                 if n != counts[ms]:
                     assert n == counts[ms] + 1, (ms, t)          # one run of a loop for each of its alarms
                     ran = sim.get(PROBE, f"<t{ms}")
-                    assert t - 1000 < ran <= t, (ms, t, ran)     # at its alarm, within the millisecond synced
+                    assert ran == t, (ms, t, ran)                # at the time synced, its alarm within that ms
                     assert sim.get(PROBE, f"<s{ms}") == t        # reading that millisecond's sensor
                     seen[ms] += 1
             last = t
@@ -114,4 +114,12 @@ def test_steps_to_each_alarm_rounded_up_to_the_millisecond(lang, request):
         frozen = {ms: sim.get(PROBE, f"<n{ms}") for ms in PERIODS_MS}
         await asyncio.sleep(0.5)                                 # no step, no robot time
         assert {ms: sim.get(PROBE, f"<n{ms}") for ms in PERIODS_MS} == frozen
+        # a sync 1 s on, as after a stall: each loop runs once then, skipping the ones it missed as TimedRobot does
+        # after an overrun, and its next alarm is on its own grid again
+        t = ceil_ms(last + 1_000_000)
+        nxt = await sync(sim, t)
+        for ms in PERIODS_MS:
+            assert sim.get(PROBE, f"<n{ms}") == frozen[ms] + 1, (ms, frozen[ms], sim.get(PROBE, f"<n{ms}"))
+            assert sim.get(PROBE, f"<t{ms}") == t
+        assert t < nxt <= t + 20_000
     asyncio.run(run_probe(body, lang, connect_s=30 if lang == "python" else 180))

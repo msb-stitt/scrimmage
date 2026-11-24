@@ -6,9 +6,10 @@
 // including TimedRobot's loop, and waits for them) and then reports done_seq. Only the HAL C API
 // is used, so one build works with RobotPy's and GradleRIO's HAL of the same WPILib year.
 //
-// With step_us = 0, step_seq is instead the FPGA time, us, to step to, and before done_seq the extension reports
+// With step_us = 0, step_seq is instead the FPGA time, us, to jump to, and before done_seq the extension reports
 // next_us, the robot's next notifier alarm, so a server can sync each robot at its own times (the fork's multi-robot
-// branch; tests/test_lockstep_time.py).
+// branch; tests/test_lockstep_time.py). The clock jumps there in one move, so what is due runs once at that time and
+// TimedRobot reschedules each callback past the periods it missed, as after a loop overrun on a robot.
 //
 // halsim_ws_client starts relaying a SimDevice created mid-run from its own network thread, so a device the robot
 // creates during a step can reach scrimmage after that step's done_seq. With each done_seq the extension therefore
@@ -221,6 +222,8 @@ void OnStepSeq(const char*, void* param, HAL_SimValueHandle, int32_t, const HAL_
   s->cv.notify_all();
 }
 
+void JumpTo(State* s, uint64_t target);
+
 void WorkerLoop(State* s) {
   enum class Mode { kPending, kEngaged, kFree };
   Mode mode = Mode::kPending;  // paused at load, waiting for scrimmage
@@ -311,11 +314,8 @@ void WorkerLoop(State* s) {
         if (us > 0) {
           HALSIM_StepTiming(static_cast<uint64_t>(us));
         } else {
-          // step_us = 0: step_seq is the FPGA time, us, to step to. HALSIM_StepTiming stops at each notifier alarm
-          // on the way and waits for its loop, so a loop runs at its own alarm and the clock ends at step_seq.
-          int32_t status = 0;
-          const uint64_t now = HAL_GetFPGATime(&status);
-          if (static_cast<uint64_t>(seq) > now) HALSIM_StepTiming(static_cast<uint64_t>(seq) - now);
+          // step_us = 0: step_seq is the FPGA time, us, to jump to (JumpTo).
+          JumpTo(s, static_cast<uint64_t>(seq));
           const uint64_t next = HALSIM_GetNextNotifierTimeout();
           HAL_SetSimValueLong(s->nextUs, next > static_cast<uint64_t>(INT64_MAX) ? INT64_MAX : static_cast<int64_t>(next));
         }
@@ -345,6 +345,26 @@ void Worker(State* s) {
 bool WaitExited(State* s, std::chrono::milliseconds timeout) {
   std::unique_lock lock{s->m};
   return s->cv.wait_for(lock, timeout, [&] { return s->exited; });
+}
+
+// The clock jumped to `target` in one move, and what is due then run and finished. HALSIM_StepTiming would stop at
+// each alarm on the way and run its loop there, so a robot synced after a stall would run every loop it missed back
+// to back. HALSIM_StepTimingAsync moves the clock and wakes the notifiers without waiting for them. A woken notifier
+// clears its alarm and its waiting flag together, under its own lock, so once no alarm at or before the clock is left
+// each due notifier has woken (a Notifier behind by several periods fires once for each, as on a robot), and
+// HALSIM_StepTiming(0) waits for every notifier to be waiting again.
+void JumpTo(State* s, uint64_t target) {
+  int32_t status = 0;
+  const uint64_t now = HAL_GetFPGATime(&status);
+  if (target > now) HALSIM_StepTimingAsync(target - now);
+  while (HALSIM_GetNextNotifierTimeout() <= HAL_GetFPGATime(&status)) {
+    {
+      std::lock_guard lock{s->m};
+      if (s->stop) return;
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
+  }
+  HALSIM_StepTiming(0);
 }
 
 // Stop every notifier, which wakes a HALSIM_StepTiming that is waiting for one of them to finish.

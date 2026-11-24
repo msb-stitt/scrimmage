@@ -340,11 +340,14 @@ def test_a_robot_held_past_its_sync_timeout_is_left_behind_and_rejoins():
     assert_on_time("p21", loops["p21"], server.runs["p21"])
     assert_on_time("p40", loops["p40"], server.runs["p40"])
     assert server.links["p25"].timeouts >= 1
-    # p25 rejoined at the server's time: HALSIM_StepTiming stops at each alarm on the way, so TimedRobot ran each loop
-    # it missed, at its own alarm, in that one sync, rather than skipping them as a late roboRIO does
-    catch_up = [(at, n) for at, n in server.runs["p25"] if n > 1]
-    assert len(catch_up) == 1 and catch_up[0][0] > 600_000, server.runs["p25"]
+    # p25 rejoined at the server's time: the extension jumps the clock, so TimedRobot ran one loop then and skipped
+    # the ones it missed, as a late roboRIO does, then went on along its own 25 ms grid
+    assert all(n == 1 for _, n in server.runs["p25"]), server.runs["p25"]
     gaps = [b[1] - a[1] for a, b in zip(loops["p25"], loops["p25"][1:])]
-    assert set(gaps) - {25_000} and all(g % 25_000 == 0 for g in gaps)   # only the loops seen between syncs
-    after = [(at, ran) for at, ran in loops["p25"] if at > catch_up[0][0]]
+    held = [i for i, g in enumerate(gaps) if g > 25_000]
+    assert len(held) == 1 and gaps[held[0]] > 500_000, gaps         # one gap, the hold, and no loops run to fill it
+    rejoin = loops["p25"][held[0] + 1]
+    assert rejoin[0] > 600_000 and rejoin[0] - 1000 < rejoin[1] <= rejoin[0]
+    after = loops["p25"][held[0] + 2:]
     assert after and all(at - 1000 < ran <= at for at, ran in after)     # then on time again
+    assert all(ran % 25_000 == loops["p25"][0][1] % 25_000 for _, ran in after)
