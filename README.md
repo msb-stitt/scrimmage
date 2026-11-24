@@ -45,7 +45,7 @@ It is optional only for driving by hand in real time. To opt out:
   The session then runs in real time, isn't held between calls, and `advance` waits in real time.
 
 (`serve --speed` other than 1 is the one command that exits with code 2 without the extension.) On
-macOS and Windows on ARM the simulation always runs in real time this way.
+Windows on ARM the simulation always runs in real time this way.
 
 Drive the robot by hand with two terminals, both started from the repo root:
 
@@ -1088,19 +1088,22 @@ The end-to-end tests launch the bridge and a RobotPy program and check four thin
 
 ## Limits of this prototype
 
-- **Lockstep runs on Linux and Windows x64.** On Windows the package carries the extension prebuilt (no C++
-  compiler), and a RobotPy robot with REV SPARKs isn't bit-identical from run to run there: REV's simulated sensor
-  noise isn't pinned ([docs/rev.md](docs/rev.md#limitations)). On macOS and Windows on ARM Scrimmage runs in real time: the
-  robot program runs on the wall clock and physics keeps pace (about 0.5 ms of CPU per 20 ms robot loop for
-  the kitbot). `pip install ./lockstep` works there too, without a C++ compiler: it installs the RobotPy REV SPARK
-  and LaserCAN helpers (which work everywhere, in real time) but not the lockstep extension, so a RobotPy command with
-  `--scrimmage-lockstep` loads the helpers and the robot runs in real time.
+- **Lockstep runs on Linux, Windows x64 and macOS on Apple silicon.** On Windows the package carries the extension
+  prebuilt (no C++ compiler), and a RobotPy robot with REV SPARKs isn't bit-identical from run to run there: REV's
+  simulated sensor noise isn't pinned ([docs/rev.md](docs/rev.md#limitations)). On macOS `pip install ./lockstep`
+  builds it with Apple's compiler. On Windows on ARM Scrimmage runs in real time: the robot program runs on the wall
+  clock and physics keeps pace (about 0.5 ms of CPU per 20 ms robot loop for the kitbot). `pip install ./lockstep`
+  works there too, without a C++ compiler: it installs the RobotPy REV SPARK and LaserCAN helpers (which work
+  everywhere, in real time) but not the lockstep extension, so a RobotPy command with `--scrimmage-lockstep` loads the
+  helpers and the robot runs in real time.
 - **Brownout is reported, not enforced.** Battery voltage reaches the robot code, but outputs are not
   disabled below 6.8 V the way a roboRIO would.
-- **One robot** per bridge, the same as Synthesis, and **one session per MCP server**.
+- **One robot** per bridge, the same as Synthesis, and **one session per MCP server**. Several robots run on one
+  field with `scrimmage.multi`, beside the bridge: [docs/multi-robot.md](docs/multi-robot.md).
 - **One robot program per machine at a time.** Scenario runs and sessions can't run in parallel on one
   machine: every robot program serves NetworkTables on port 5810, so they would read each other's values.
-  A session refuses to start while something already listens on that port.
+  A session refuses to start while something already listens on that port. On Linux, `tools/robot-netns.sh` gives
+  each robot program a network namespace of its own: [docs/multi-robot.md](docs/multi-robot.md).
 - **NT values lag at `--speed max`.** Scenario checks that read NetworkTables hold the simulation briefly
   to let them settle.
 - `AnalogGyro`, PCM and pneumatics, `DutyCycleEncoder` and cameras aren't bound yet. The protocol
