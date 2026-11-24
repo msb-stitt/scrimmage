@@ -1,6 +1,7 @@
 """Probe robot for several robots in lockstep (tests/test_multi.py): one loop, TimedRobot's, at PROBE_PERIOD_MS,
 reporting its count and the FPGA time it ran at over a SimDevice. With PROBE_HOLD_AT_MS, the first loop at or after
-that FPGA time sleeps PROBE_HOLD_S wall seconds, a breakpoint's stand-in."""
+that FPGA time sleeps PROBE_HOLD_S wall seconds, a breakpoint's stand-in. With PROBE_NAME, it puts that name in its
+NetworkTables as /SmartDashboard/robot."""
 
 import os
 import time
@@ -22,6 +23,8 @@ class MyRobot(wpilib.TimedRobot):
         self.t = self.dev.createLong("t", _D.kOutput, 0)
         self.n = self.dev.createLong("n", _D.kOutput, 0)
         self.held = False
+        if os.environ.get("PROBE_NAME"):
+            wpilib.SmartDashboard.putString("robot", os.environ["PROBE_NAME"])
 
     def robotPeriodic(self):
         now = wpilib.RobotController.getFPGATime()
